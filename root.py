@@ -1,0 +1,16 @@
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+DATA_DIR = ROOT / "DATA"
+RAW_DIR = DATA_DIR / "raw"
+PROCESSED_DIR = DATA_DIR / "processed"
+DUCKDB_PATH = PROCESSED_DIR / "features.db"
+FEATURES_DIR = PROCESSED_DIR / "features"
+FEATURES_PRICE_PARQUET = FEATURES_DIR / "features_price.parquet"
+FEATURES_FUND_PARQUET = FEATURES_DIR / "features_fundamentals.parquet"
+FEATURES_CONS_PARQUET = FEATURES_DIR / "features_consensus.parquet"
+FEATURES_SECTOR_PARQUET = FEATURES_DIR / "features_sector.parquet"
+PRICE_PARQUET = PROCESSED_DIR / "price.parquet"
+FUND_PARQUET = PROCESSED_DIR / "fundamentals.parquet"
+CONS_PARQUET = PROCESSED_DIR / "consensus.parquet"
+SECTOR_PARQUET = PROCESSED_DIR / "sector.parquet"
