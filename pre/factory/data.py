@@ -240,12 +240,10 @@ class Data:
             },
             "consensus": {
                 "names": {
-                    "op_fq1",
-                    "op_fq2",
-                    "op_fy1",
-                    "eps_fq1",
-                    "eps_fq2",
-                    "eps_fy1",
+                    "op_fq_sprd",
+                    "eps_fq_sprd",
+                    "op_fq_turn",
+                    "eps_fq_turn",
                     "rev_op_fq1",
                     "rev_op_fq2",
                     "rev_op_fy1",
