@@ -53,3 +53,11 @@ class Load:
 
     def sector(self):
         return self.csv("qw_wics_sec_big")
+
+    def k200(self):
+        return self.csv("qw_k200_yn")
+
+    def universe(self, name: str = "k200"):
+        if name == "k200":
+            return self.k200()
+        raise ValueError(f"Unknown universe: {name}")

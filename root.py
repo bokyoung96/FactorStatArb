@@ -14,3 +14,4 @@ PRICE_PARQUET = PROCESSED_DIR / "price.parquet"
 FUND_PARQUET = PROCESSED_DIR / "fundamentals.parquet"
 CONS_PARQUET = PROCESSED_DIR / "consensus.parquet"
 SECTOR_PARQUET = PROCESSED_DIR / "sector.parquet"
+UNIVERSE_PARQUET = PROCESSED_DIR / "universe_k200.parquet"  # default K200, extendable

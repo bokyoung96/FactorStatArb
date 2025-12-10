@@ -4,8 +4,9 @@ import pandas as pd
 import logging
 
 from pre.base.duck import DB
-from root import CONS_PARQUET, FUND_PARQUET, PRICE_PARQUET, SECTOR_PARQUET
+from root import CONS_PARQUET, FUND_PARQUET, PRICE_PARQUET, SECTOR_PARQUET, UNIVERSE_PARQUET
 from root import FEATURES_PRICE_PARQUET, FEATURES_FUND_PARQUET, FEATURES_CONS_PARQUET, FEATURES_SECTOR_PARQUET, FEATURES_DIR
+from pre.market.univ import master as master_univ, active as active_univ
 
 
 class Data:
@@ -69,11 +70,23 @@ class Data:
         out.index = base_idx
         return out
 
-    def make(self, table: str = "features"):
+    def make(self, table: str = "features", universe: str = "k200"):
         price = self.load.price()
         idx = price["c"].index
 
+        uni_raw = self.load.universe(universe)
+        uni_daily = self.align.daily(uni_raw, idx)
+        uni_master = master_univ(uni_daily)
+        uni_active = active_univ(uni_daily, uni_master)
+
+        def filter_cols(df: pd.DataFrame) -> pd.DataFrame:
+            cols = [c for c in df.columns if c in uni_master]
+            return df.loc[:, cols]
+
+        price = {k: filter_cols(v) for k, v in price.items()}
+
         fund_src = self.load.fundamentals()
+        fund_src = {k: filter_cols(v) for k, v in fund_src.items()}
         base_idx = next(iter(fund_src.values())).index
         if base_idx.hasnans:
             self.log.warning("Found NaT in fundamentals index; dropping NaT rows")
@@ -103,8 +116,8 @@ class Data:
             fund_monthly[name] = self._to_monthly(qdf, q_labels, base_idx)
 
         fundamentals = {k: self._monthly_to_daily(v, idx) for k, v in fund_monthly.items()}
-        consensus = {k: self.align.daily(v, idx) for k, v in self.load.consensus().items()}
-        sectors = self.align.daily(self.load.sector(), idx)
+        consensus = {k: filter_cols(self.align.daily(v, idx)) for k, v in self.load.consensus().items()}
+        sectors = filter_cols(self.align.daily(self.load.sector(), idx))
 
         price_df = pd.concat(
             [
@@ -152,6 +165,7 @@ class Data:
             ],
         )
         sector_df = pd.concat([sectors], axis=1, keys=["sector"])
+        active_df = uni_active.reindex(idx).ffill()
 
         self.log.info("Saving raw price to %s", PRICE_PARQUET)
         self.db.save_parquet(price_df, PRICE_PARQUET)
@@ -161,6 +175,8 @@ class Data:
         self.db.save_parquet(cons_df, CONS_PARQUET)
         self.log.info("Saving raw sector to %s", SECTOR_PARQUET)
         self.db.save_parquet(sector_df, SECTOR_PARQUET)
+        self.log.info("Saving universe '%s' (active mask) to %s", universe, UNIVERSE_PARQUET)
+        self.db.save_parquet(active_df, UNIVERSE_PARQUET)
 
         df = pd.concat(
             [price_df, fund_df, cons_df, sector_df],
@@ -273,4 +289,7 @@ class Data:
             if not cols:
                 continue
             subset = df.loc[:, cols]
+            if subset.columns.duplicated().any():
+                self.log.warning("Dropping duplicated columns in %s features", group_name)
+                subset = subset.loc[:, ~subset.columns.duplicated()]
             self.db.save_parquet(subset, cfg["path"])
