@@ -21,15 +21,13 @@ from root import (
     FEATURES_FUND_PARQUET,
     FEATURES_CONS_PARQUET,
     FEATURES_SECTOR_PARQUET,
+    UNIVERSE_PARQUET,
 )
 
 
 class Loader:
     def __init__(self):
         self.db = DB()
-
-    def _view(self, name: str, path) -> None:
-        self.db.q(f"CREATE OR REPLACE VIEW {name} AS SELECT * FROM parquet_scan('{Path(path)}')")
 
     def _to_multiindex(self, df):
         date_cols = [c for c in df.columns if str(c).lower() in {"date", "index", "level_0"} or str(c).startswith("Unnamed")]
@@ -81,70 +79,82 @@ class Loader:
     def _quote(self, name: str) -> str:
         return '"' + name.replace('"', '""') + '"'
 
-    def price(self):
-        self._view("price", PRICE_PARQUET)
-        return self._to_multiindex(self.db.q("SELECT * FROM price"))
+    RAW_MAP = {
+        "price": PRICE_PARQUET,
+        "fundamentals": FUND_PARQUET,
+        "consensus": CONS_PARQUET,
+        "sector": SECTOR_PARQUET,
+        "universe": UNIVERSE_PARQUET,
+    }
 
-    def fundamentals(self):
-        self._view("fundamentals", FUND_PARQUET)
-        return self._to_multiindex(self.db.q("SELECT * FROM fundamentals"))
+    FEAT_MAP = {
+        "features_price": FEATURES_PRICE_PARQUET,
+        "features_fundamentals": FEATURES_FUND_PARQUET,
+        "features_consensus": FEATURES_CONS_PARQUET,
+        "features_sector": FEATURES_SECTOR_PARQUET,
+    }
 
-    def consensus(self):
-        self._view("consensus", CONS_PARQUET)
-        return self._to_multiindex(self.db.q("SELECT * FROM consensus"))
-
-    def sector(self):
-        self._view("sector", SECTOR_PARQUET)
-        return self._to_multiindex(self.db.q("SELECT * FROM sector"))
-
-    def features_price(self):
-        self._view("features_price", FEATURES_PRICE_PARQUET)
-        return self._to_multiindex(self.db.q("SELECT * FROM features_price"))
-
-    def features_fundamentals(self):
-        self._view("features_fundamentals", FEATURES_FUND_PARQUET)
-        return self._to_multiindex(self.db.q("SELECT * FROM features_fundamentals"))
-
-    def features_consensus(self):
-        self._view("features_consensus", FEATURES_CONS_PARQUET)
-        return self._to_multiindex(self.db.q("SELECT * FROM features_consensus"))
-
-    def features_sector(self):
-        self._view("features_sector", FEATURES_SECTOR_PARQUET)
-        return self._to_multiindex(self.db.q("SELECT * FROM features_sector"))
-
-    def feature_subset(self, table: str = "features_price", cols: Optional[Sequence[str]] = None):
-        path_map = {
-            "features_price": FEATURES_PRICE_PARQUET,
-            "features_fundamentals": FEATURES_FUND_PARQUET,
-            "features_consensus": FEATURES_CONS_PARQUET,
-            "features_sector": FEATURES_SECTOR_PARQUET,
-        }
-        if table not in path_map:
-            raise ValueError(f"Unknown table: {table}")
-
-        path = Path(path_map[table])
+    def _select(self, path: Path, cols: Optional[Sequence[str]] = None):
         schema_cols = self.db.con.execute(f"SELECT * FROM parquet_scan('{path}') LIMIT 0").df().columns
         if cols:
             target = set(cols)
             keep = [c for c in schema_cols if self._first_level(c) in target]
         else:
             keep = list(schema_cols)
-
         if not keep:
             return pd.DataFrame()
-
-        select_clause = ", ".join(self._quote(str(c)) for c in keep)
-        df = self.db.q(f"SELECT {select_clause} FROM parquet_scan('{path}')")
+        clause = ", ".join(self._quote(str(c)) for c in keep)
+        df = self.db.q(f"SELECT {clause} FROM parquet_scan('{path}')")
         return self._to_multiindex(df)
+
+    def raw(self, table: str = "price", cols: Optional[Sequence[str]] = None):
+        if table not in self.RAW_MAP:
+            raise ValueError(f"Unknown raw table: {table}")
+        return self._select(Path(self.RAW_MAP[table]), cols)
+
+    def price(self, cols: Optional[Sequence[str]] = None):
+        return self.raw("price", cols)
+
+    def fundamentals(self, cols: Optional[Sequence[str]] = None):
+        return self.raw("fundamentals", cols)
+
+    def consensus(self, cols: Optional[Sequence[str]] = None):
+        return self.raw("consensus", cols)
+
+    def sector(self, cols: Optional[Sequence[str]] = None):
+        return self.raw("sector", cols)
+
+    def universe(self, name: str = "k200", cols: Optional[Sequence[str]] = None):
+        return self.raw("universe", cols)
+
+    def features(self, table: str = "features_price", cols: Optional[Sequence[str]] = None):
+        if table not in self.FEAT_MAP:
+            raise ValueError(f"Unknown features table: {table}")
+        return self._select(Path(self.FEAT_MAP[table]), cols)
+
+    def features_price(self, cols: Optional[Sequence[str]] = None):
+        return self.features("features_price", cols)
+
+    def features_fundamentals(self, cols: Optional[Sequence[str]] = None):
+        return self.features("features_fundamentals", cols)
+
+    def features_consensus(self, cols: Optional[Sequence[str]] = None):
+        return self.features("features_consensus", cols)
+
+    def features_sector(self, cols: Optional[Sequence[str]] = None):
+        return self.features("features_sector", cols)
+
+    def feature_subset(self, table: str = "features_price", cols: Optional[Sequence[str]] = None):
+        return self.features(table, cols)
+
+    def raw_subset(self, table: str = "price", cols: Optional[Sequence[str]] = None):
+        return self.raw(table, cols)
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    loader = Loader()
+    ldr = Loader()
 
-    table = "features_consensus"
+    raw = ldr.raw("price")
+    feat = ldr.features("features_consensus")
 
-    df = getattr(loader, table)()
-
-    logging.info("[%s] shape: %s", table, df.shape)
