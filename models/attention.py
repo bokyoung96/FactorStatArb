@@ -19,6 +19,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from loader import Loader
+from models.classify import classify
 from models.util import DeviceSelector
 from root import (
     FACTOR_DIR,
@@ -70,6 +71,7 @@ class FactorBatch:
     returns: torch.Tensor
     mask: torch.Tensor
     assets: pd.Index
+    normalize_idx: Sequence[int]
 
 
 @dataclass(frozen=True)
@@ -85,28 +87,50 @@ class FeatureNormalizer:
         self.eps = eps
         self._mean: Optional[torch.Tensor] = None
         self._std: Optional[torch.Tensor] = None
+        self._normalize_idx: Optional[torch.Tensor] = None
 
     @property
     def fitted(self) -> bool:
         return self._mean is not None and self._std is not None
 
     def fit(self, features: torch.Tensor, mask: Optional[torch.Tensor] = None) -> "FeatureNormalizer":
+        normalize_idx = self._normalize_idx
         feats = self._select_valid(features, mask)
+        if normalize_idx is not None:
+            feats = feats[:, normalize_idx]
         self._mean = feats.mean(dim=0, keepdim=True)
         std = feats.std(dim=0, keepdim=True)
         self._std = torch.clamp(std, min=self.eps)
         return self
 
-    def transform(self, features: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def transform(
+        self,
+        features: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+        normalize_idx: Optional[Sequence[int]] = None,
+    ) -> torch.Tensor:
         if not self.fitted:
             raise RuntimeError("FeatureNormalizer must be fitted before transform.")
-        feats = (features - self._mean.to(features.device)) / self._std.to(features.device)
+        idx = (
+            torch.as_tensor(normalize_idx, dtype=torch.long, device=features.device)
+            if normalize_idx is not None
+            else self._normalize_idx.to(features.device) if self._normalize_idx is not None else None
+        )
+        if (idx is None or idx.numel() == 0) and self._normalize_idx is not None and self._normalize_idx.numel() > 0:
+            idx = self._normalize_idx.to(features.device)
+        feats = features
+        if idx is not None and idx.numel() > 0:
+            feats = feats.clone()
+            feats[:, idx] = (feats[:, idx] - self._mean.to(features.device)) / self._std.to(features.device)
         if mask is not None:
             feats = feats * mask.unsqueeze(-1)
         return feats
 
     def fit_transform(self, features: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         return self.fit(features, mask).transform(features, mask)
+
+    def set_normalize_idx(self, normalize_idx: Sequence[int]) -> None:
+        self._normalize_idx = torch.as_tensor(list(normalize_idx), dtype=torch.long)
 
     def _select_valid(self, features: torch.Tensor, mask: Optional[torch.Tensor]) -> torch.Tensor:
         if mask is None:
@@ -156,12 +180,15 @@ class FeatureRepository:
             raise KeyError(f"Return column '{self.return_col}' not found in price features.")
         returns_series = price_feats.reindex(assets)[self.return_col].astype(float).fillna(0.0)
         mask_vals = mask_series.reindex(assets).fillna(0).astype(float)
+        to_norm, _ = classify(features_df.columns)
+        normalize_idx = [i for i, c in enumerate(features_df.columns) if c in to_norm]
 
         return FactorBatch(
             features=torch.tensor(features_df.values, dtype=torch.float32, device=self.device),
             returns=torch.tensor(returns_series.values, dtype=torch.float32, device=self.device),
             mask=torch.tensor(mask_vals.values, dtype=torch.float32, device=self.device),
             assets=assets,
+            normalize_idx=normalize_idx,
         )
 
     def _to_matrix(self, df: pd.DataFrame, date) -> pd.DataFrame:
@@ -284,6 +311,13 @@ class AttentionPipeline:
         self.writer = writer
         self.normalize = normalize
 
+    def _apply_normalization(self, batch: FactorBatch) -> torch.Tensor:
+        if not self.normalize:
+            return batch.features
+        if not self.normalizer.fitted:
+            raise RuntimeError("Normalizer must be fitted before transform.")
+        return self.normalizer.transform(batch.features, batch.mask, batch.normalize_idx)
+
     @classmethod
     def from_loader(
         cls,
@@ -304,26 +338,40 @@ class AttentionPipeline:
         return cls(model=model, repository=repository, normalizer=normalizer, writer=writer, normalize=normalize)
 
     def fit_normalizer(self, dates: Sequence) -> None:
-        logging.info("Fitting normalizer on %d dates", len(dates))
-        feats_list = []
-        masks_list = []
-        for date in dates:
-            batch = self.repository.load_snapshot(date)
-            feats_list.append(batch.features)
-            masks_list.append(batch.mask)
-        if not feats_list:
-            raise ValueError("No dates provided to fit the normalizer.")
-        feats_all = torch.cat(feats_list, dim=0)
-        masks_all = torch.cat(masks_list, dim=0)
-        self.normalizer.fit(feats_all, masks_all)
+        loader = self.repository.loader
+        price = loader.features_price()
+        fundamentals = loader.features_fundamentals()
+        consensus = loader.features_consensus()
+        sector = loader.features_sector()
+        combined = pd.concat([price, fundamentals, consensus, sector], axis=1)
+        if not isinstance(combined.columns, pd.MultiIndex):
+            raise ValueError("Expected MultiIndex columns with asset level for stacking.")
+        X = combined.stack(level=0, future_stack=True)  # (date, asset) index, feature columns
+        univ = loader.universe()
+        valid_idx = (univ.stack() > 0)
+        valid_mask = valid_idx.reindex(X.index, fill_value=False)
+        if not valid_mask.any():
+            logging.warning("Universe mask empty after alignment; using all rows for normalization.")
+            X_valid = X
+        else:
+            X_valid = X[valid_mask]
+        to_norm, _ = classify(X.columns)
+        normalize_idx = [i for i, c in enumerate(X.columns) if c in to_norm]
+        self.normalizer.set_normalize_idx(normalize_idx)
+        if not normalize_idx:
+            raise ValueError("No columns selected for normalization.")
+        target = X_valid.iloc[:, normalize_idx].apply(pd.to_numeric, errors="coerce")
+        if target.empty:
+            logging.warning("Normalization columns empty after filtering; using unfiltered data.")
+            target = X.iloc[:, normalize_idx].apply(pd.to_numeric, errors="coerce")
+        mean = target.mean(axis=0)
+        std = target.std(axis=0).clip(lower=self.normalizer.eps)
+        self.normalizer._mean = torch.tensor(mean.values, dtype=torch.float32).unsqueeze(0)
+        self.normalizer._std = torch.tensor(std.values, dtype=torch.float32).unsqueeze(0)
 
     def run_on_date(self, date, save: bool = True, split: str = "full") -> FactorResult:
         batch = self.repository.load_snapshot(date)
-        feats = (
-            self.normalizer.transform(batch.features, batch.mask)
-            if self.normalize and self.normalizer.fitted
-            else batch.features
-        )
+        feats = self._apply_normalization(batch)
         weights, fr, pred, res = self.model(feats, batch.returns, batch.mask)
         result = FactorResult(weights=weights, factor_returns=fr, predicted=pred, residuals=res)
         if save and self.writer:
@@ -365,11 +413,7 @@ class AttentionPipeline:
                 for idx in idxs:
                     date = dates[idx]
                     batch = self.repository.load_snapshot(date)
-                    feats = (
-                        self.normalizer.transform(batch.features, batch.mask)
-                        if self.normalize
-                        else batch.features
-                    )
+                    feats = self._apply_normalization(batch)
                     _, _, predicted, _ = self.model(feats, batch.returns, batch.mask)
                     valid = batch.mask > 0
                     if not valid.any():
