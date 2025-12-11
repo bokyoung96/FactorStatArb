@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 import logging
+from tqdm import tqdm
 
 from pre.base.duck import DB
 from root import CONS_PARQUET, FUND_PARQUET, PRICE_PARQUET, SECTOR_PARQUET, UNIVERSE_PARQUET
@@ -277,7 +278,7 @@ class Data:
             },
         }
 
-        for group_name, cfg in feature_groups.items():
+        for group_name, cfg in tqdm(feature_groups.items(), desc="Saving features"):
             names = cfg["names"]
             cols = []
             for c in df.columns:
