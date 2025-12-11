@@ -1,0 +1,11 @@
+{
+  "num_factors": 32,
+  "emb_dim": 32,
+  "return_col": "ret1",
+  "split_year": 2020,
+  "normalize": true,
+  "train_epochs": 20,
+  "train_batch_size": 32,
+  "train_lr": 0.001,
+  "train_weight_decay": 0.0001
+}
