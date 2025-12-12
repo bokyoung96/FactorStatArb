@@ -156,5 +156,5 @@ if __name__ == "__main__":
     ldr = Loader()
 
     raw = ldr.raw("price")
-    feat = ldr.features("features_consensus")
+    feat = ldr.features("features_price")
 
