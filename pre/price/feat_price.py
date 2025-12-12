@@ -14,6 +14,15 @@ def _ema(x, span: int):
     return x.ewm(span=span, adjust=False).mean()
 
 
+def _safe_div(num, denom):
+    out = num.divide(denom)
+    return out.replace([np.inf, -np.inf], np.nan)
+
+
+def _trading_value(df):
+    return df["close"] * df["vol"]
+
+
 def _rsi(series, window: int = 14):
     delta = series.diff()
     gain = delta.clip(lower=0)
@@ -78,7 +87,7 @@ class M1_VA(F):
     def run(self, df):
         m1 = df["close"].pct_change(21, fill_method=None)
         vol20 = df["close"].pct_change(fill_method=None).rolling(20).std()
-        return add_feature(df, FE.M1_VA.value, m1 / vol20)
+        return add_feature(df, FE.M1_VA.value, _safe_div(m1, vol20))
 
 
 @register(FE.M12_VA)
@@ -86,7 +95,7 @@ class M12_VA(F):
     def run(self, df):
         m12 = df["close"].pct_change(252, fill_method=None)
         vol20 = df["close"].pct_change(fill_method=None).rolling(20).std()
-        return add_feature(df, FE.M12_VA.value, m12 / vol20)
+        return add_feature(df, FE.M12_VA.value, _safe_div(m12, vol20))
 
 
 @register(FE.REV5)
@@ -174,15 +183,15 @@ class VOLMA20(F):
 class VOLMA_R(F):
     def run(self, df):
         volma20 = df["vol"].rolling(20).mean()
-        volr = df["vol"] / volma20
+        volr = _safe_div(df["vol"], volma20)
         return add_feature(df, FE.VOLMA_R.value, volr)
 
 
 @register(FE.TURNOVER)
 class TURNOVER(F):
     def run(self, df):
-        shares_out = df["mcap"] / df["close"]
-        turnover = df["vol"] / shares_out
+        shares_out = _safe_div(df["mcap"], df["close"])
+        turnover = _safe_div(df["vol"], shares_out)
         return add_feature(df, FE.TURNOVER.value, turnover)
 
 
@@ -190,7 +199,8 @@ class TURNOVER(F):
 class AMIHUD(F):
     def run(self, df):
         ret = df["close"].pct_change(fill_method=None)
-        amihud = ret.abs() / df["vol"]
+        trading_value = _trading_value(df)
+        amihud = _safe_div(ret.abs(), trading_value)
         return add_feature(df, FE.AMIHUD.value, amihud)
 
 
@@ -205,7 +215,8 @@ class SPRD(F):
 class PIMPACT(F):
     def run(self, df):
         ret = df["close"].pct_change(fill_method=None)
-        pimpact = ret.abs() * df["vol"]
+        trading_value = _trading_value(df)
+        pimpact = _safe_div(ret.abs(), trading_value)
         return add_feature(df, FE.PIMPACT.value, pimpact)
 
 
@@ -214,7 +225,7 @@ class VOLSHOCK(F):
     def run(self, df):
         volma20 = df["vol"].rolling(20).mean()
         volstd20 = df["vol"].rolling(20).std()
-        volshock = (df["vol"] - volma20) / volstd20
+        volshock = _safe_div(df["vol"] - volma20, volstd20)
         return add_feature(df, FE.VOLSHOCK.value, volshock)
 
 
@@ -277,7 +288,7 @@ class STO_K(F):
     def run(self, df):
         low_k = df["low"].rolling(14).min()
         high_k = df["high"].rolling(14).max()
-        sto_k = (df["close"] - low_k) / (high_k - low_k)
+        sto_k = _safe_div(df["close"] - low_k, (high_k - low_k))
         return add_feature(df, FE.STO_K.value, sto_k)
 
 
@@ -316,21 +327,21 @@ class BOLL_W(F):
         std = df["close"].rolling(20).std()
         upper = mean + 2 * std
         lower = mean - 2 * std
-        bw = (upper - lower) / mean
+        bw = _safe_div((upper - lower), mean)
         return add_feature(df, FE.BOLL_W.value, bw)
 
 
 @register(FE.HIGH52)
 class HIGH52(F):
     def run(self, df):
-        high52 = df["close"] / df["close"].rolling(252).max()
+        high52 = _safe_div(df["close"], df["close"].rolling(252).max())
         return add_feature(df, FE.HIGH52.value, high52)
 
 
 @register(FE.LOW52)
 class LOW52(F):
     def run(self, df):
-        low52 = df["close"] / df["close"].rolling(252).min()
+        low52 = _safe_div(df["close"], df["close"].rolling(252).min())
         return add_feature(df, FE.LOW52.value, low52)
 
 
@@ -345,12 +356,13 @@ class PRICE_Z(F):
 class DIST_MA20(F):
     def run(self, df):
         ma20 = df["close"].rolling(20).mean()
-        dist = df["close"] / ma20 - 1
+        dist = _safe_div(df["close"], ma20) - 1
         return add_feature(df, FE.DIST_MA20.value, dist)
 
 
 @register(FE.BREAKOUT)
 class BREAKOUT(F):
     def run(self, df):
-        br = (df["close"] > df["close"].rolling(20).max()).astype(int)
+        rolling_max = df["close"].rolling(20).max().shift(1)
+        br = (df["close"] > rolling_max).astype(int)
         return add_feature(df, FE.BREAKOUT.value, br)
