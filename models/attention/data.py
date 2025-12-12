@@ -1,21 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import List, Optional, Sequence, Tuple, Iterable
+from typing import List, Optional, Sequence, Tuple
 
+import ast
 import pandas as pd
 import torch
 
 from loader import Loader
 from models.classify import classify
-from root import FEATURES_PRICE_PARQUET, FEATURES_SECTOR_PARQUET
 
 
 @dataclass(frozen=True)
 class FeatureGroup:
     name: str
-    path: Path
+    loader_method: str
     allowed: Optional[Sequence[str]] = None
 
 
@@ -55,42 +54,70 @@ class FeatureRepository:
 
     def _default_groups(self) -> List[FeatureGroup]:
         return [
-            FeatureGroup("price", FEATURES_PRICE_PARQUET),
-            FeatureGroup("sector", FEATURES_SECTOR_PARQUET),
+            FeatureGroup("price", "features_price"),
+            FeatureGroup("sector", "features_sector"),
         ]
 
     def _load_group(self, group: FeatureGroup) -> pd.DataFrame:
-        df = pd.read_parquet(group.path)
-        df = df.apply(pd.to_numeric, errors="coerce")
+        loader_fn = getattr(self.loader, group.loader_method)
+        df = self._get_multiindex(loader_fn())
         if group.allowed:
-            keep = [c for c in df.columns if (isinstance(c, tuple) and c[0] in group.allowed) or c in group.allowed]
+            allowed = set(group.allowed)
+            keep = [c for c in df.columns if (isinstance(c, tuple) and c[0] in allowed) or c in allowed]
             df = df.loc[:, keep]
-        return df
+        return df.apply(pd.to_numeric, errors="coerce")
+
+    def _get_multiindex(self, df: pd.DataFrame) -> pd.DataFrame:
+        if isinstance(df.columns, pd.MultiIndex):
+            return df
+        parsed = []
+        tuple_found = False
+        for c in df.columns:
+            if isinstance(c, str) and c.startswith("(") and c.endswith(")"):
+                try:
+                    val = ast.literal_eval(c)
+                    parsed.append(val)
+                    tuple_found = tuple_found or isinstance(val, tuple)
+                    continue
+                except Exception:
+                    pass
+            parsed.append(c)
+        if tuple_found and all(isinstance(p, tuple) for p in parsed):
+            out = df.copy()
+            out.columns = pd.MultiIndex.from_tuples(parsed)
+            return out
+        raise ValueError("Expected 2-level MultiIndex columns for features.")
 
     def _collect_schema(self, frames: List[pd.DataFrame]) -> Tuple[List[str], List[str]]:
         features = set()
         assets = set()
         for df in frames:
-            for c in df.columns:
-                if isinstance(c, tuple):
-                    features.add(str(c[0]))
-                    assets.add(str(c[1]))
+            features.update(str(f) for f in df.columns.get_level_values(0).unique())
+            assets.update(str(a) for a in df.columns.get_level_values(1).unique())
         return sorted(features), sorted(assets)
 
     def _load_and_cache(self) -> None:
         frames = [self._load_group(g) for g in self.groups]
-        combined = pd.concat(frames, axis=1).fillna(0.0)
+        if not frames:
+            raise ValueError("No feature frames loaded.")
+        common_dates = frames[0].index
+        for df in frames[1:]:
+            common_dates = common_dates.intersection(df.index)
+        common_dates = common_dates.sort_values()
+        frames = [df.reindex(common_dates) for df in frames]
+
         feature_names, assets = self._collect_schema(frames)
-        cols = [(f, a) for f in feature_names for a in assets if (f, a) in combined.columns]
+        grid = pd.MultiIndex.from_product([feature_names, assets])
+        combined = pd.concat(frames, axis=1).reindex(index=common_dates, columns=grid).fillna(0.0)
         if self.return_col not in feature_names:
             raise KeyError(f"Return column {self.return_col} not in features.")
 
-        mat = combined.loc[:, cols].values.astype("float32")
-        n_dates = len(combined.index)
+        mat = combined.values.astype("float32")
+        n_dates = len(common_dates)
         n_feats = len(feature_names)
         n_assets = len(assets)
         self.feature_tensor = torch.tensor(mat.reshape(n_dates, n_feats, n_assets))
-        self.dates = pd.Index(combined.index)
+        self.dates = pd.Index(common_dates)
         self.assets_order = assets
         self.feature_names = feature_names
         self.date_to_pos = {d: i for i, d in enumerate(self.dates)}

@@ -1,6 +1,6 @@
 {
-  "num_factors": 32,
-  "emb_dim": 32,
+  "num_factors": 8,
+  "emb_dim": 16,
   "return_col": "ret1",
   "split_year": 2020,
   "normalize": true,
