@@ -4,8 +4,15 @@ from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
 import ast
+import sys
+from pathlib import Path
+
 import pandas as pd
 import torch
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from loader import Loader
 from models.classify import classify
@@ -36,6 +43,8 @@ class FactorResult:
     factor_returns: torch.Tensor
     predicted: torch.Tensor
     residuals: torch.Tensor
+    omega_eps: Optional[torch.Tensor] = None
+    beta: Optional[torch.Tensor] = None
 
 
 class FeatureRepository:
@@ -108,7 +117,10 @@ class FeatureRepository:
 
         feature_names, assets = self._collect_schema(frames)
         grid = pd.MultiIndex.from_product([feature_names, assets])
-        combined = pd.concat(frames, axis=1).reindex(index=common_dates, columns=grid).fillna(0.0)
+        combined = pd.concat(frames, axis=1).reindex(index=common_dates, columns=grid)
+        combined = combined.dropna(how="all")
+        combined = combined.fillna(0.0)
+        common_dates = combined.index
         if self.return_col not in feature_names:
             raise KeyError(f"Return column {self.return_col} not in features.")
 

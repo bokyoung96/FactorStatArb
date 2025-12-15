@@ -6,7 +6,7 @@ from typing import Dict, List, Sequence, Tuple
 import pandas as pd
 import torch
 
-from models.attention.data import FactorResult
+from attention.data import FactorResult
 from root import FACTOR_DIR
 
 
@@ -17,7 +17,9 @@ class FactorResultWriter:
         self.returns_dir = base / "returns"
         self.pred_dir = base / "predicted"
         self.res_dir = base / "residuals"
-        for d in (self.weights_dir, self.returns_dir, self.pred_dir, self.res_dir):
+        self.portfolio_dir = base / "portfolio_weights"
+        self.pnl_dir = base / "pnl"
+        for d in (self.weights_dir, self.returns_dir, self.pred_dir, self.res_dir, self.portfolio_dir, self.pnl_dir):
             d.mkdir(parents=True, exist_ok=True)
 
     def _append(self, df: pd.DataFrame, path: Path) -> None:
@@ -79,3 +81,25 @@ class FactorResultWriter:
         self._append(fr_df, self.returns_dir / f"{year}.parquet")
         self._append(pred_res_df, self.pred_dir / f"{year}.parquet")
         self._append(pred_res_df[["residual"]], self.res_dir / f"{year}.parquet")
+
+    def save_portfolio(self, date, assets: Sequence[str], weights: torch.Tensor, split: str) -> None:
+        ts = pd.to_datetime(date)
+        year = ts.year
+        weights_np = weights.detach().cpu().numpy()
+        df = pd.DataFrame({"weight": weights_np}, index=pd.Index(list(assets), name="asset"))
+        df["date"] = ts
+        df["split"] = split
+        df = df.reset_index().set_index(["date", "split", "asset"])
+        self._append(df, self.portfolio_dir / f"{year}.parquet")
+
+    def save_pnl(self, records: Sequence[Dict], split: str) -> None:
+        if not records:
+            return
+        df = pd.DataFrame(records)
+        df["date"] = pd.to_datetime(df["date"])
+        df["split"] = split
+        df = df.set_index(["date", "split"])
+        years = df.index.get_level_values(0).year.unique()
+        for y in years:
+            chunk = df[df.index.get_level_values(0).year == y]
+            self._append(chunk, self.pnl_dir / f"{y}.parquet")
