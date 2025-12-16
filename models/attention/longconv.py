@@ -8,24 +8,19 @@ import torch.nn.functional as F
 
 
 class LongConv(nn.Module):
-    """
-    Lightweight LongConv-style 1D convolution for residual sequences.
-
-    Input shape: (batch, assets, lookback)
-    Output: portfolio scores per asset (batch, assets)
-    """
-
     def __init__(
         self,
         hidden_dim: int,
         lookback: int,
         dropout: float = 0.1,
         squash: float = 1e-3,
+        eps: float = 1e-6,
     ) -> None:
         super().__init__()
         self.hidden_dim = hidden_dim
         self.lookback = lookback
         self.squash = squash
+        self.eps = eps
         self.kernel = nn.Parameter(torch.randn(hidden_dim, lookback))
         self.skip = nn.Parameter(torch.zeros(hidden_dim))
         self.out = nn.Linear(hidden_dim, 1, bias=False)
@@ -48,12 +43,12 @@ class LongConv(nn.Module):
         feats = self.dropout(conv + skip)
         scores = self.out(feats).squeeze(-1)  # (bsz, assets)
         if mask is not None:
-            scores = scores.masked_fill(mask <= 0, -1e9)
-        weights = F.softmax(scores, dim=-1)
+            scores = scores * mask
+        weights = scores
         if mask is not None:
             weights = weights * mask
-            denom = mask.sum(dim=-1, keepdim=True).clamp_min(1e-6)
-            weights = weights / denom
+        denom = weights.abs().sum(dim=-1, keepdim=True).clamp_min(self.eps)
+        weights = weights / denom
         return weights
 
     def forward_with_feats(
@@ -68,10 +63,10 @@ class LongConv(nn.Module):
         feats = self.dropout(conv + skip)
         scores = self.out(feats).squeeze(-1)
         if mask is not None:
-            scores = scores.masked_fill(mask <= 0, -1e9)
-        weights = F.softmax(scores, dim=-1)
+            scores = scores * mask
+        weights = scores
         if mask is not None:
             weights = weights * mask
-            denom = mask.sum(dim=-1, keepdim=True).clamp_min(1e-6)
-            weights = weights / denom
+        denom = weights.abs().sum(dim=-1, keepdim=True).clamp_min(self.eps)
+        weights = weights / denom
         return weights, feats
