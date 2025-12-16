@@ -78,6 +78,7 @@ class StatArbModel(nn.Module):
             lookback=cfg.lookback,
             dropout=cfg.dropout,
             squash=cfg.squash,
+            eps=cfg.sharpe_eps,
         )
         self.device = device
 
@@ -95,8 +96,12 @@ class StatArbModel(nn.Module):
 
         target_out = self.attention(target_batch.features, target_batch.returns, target_batch.mask)
         w_asset = target_out.omega_eps.T @ port_weights
-        w_asset = w_asset * target_batch.mask
-        denom = target_batch.mask.sum().clamp_min(1e-6)
+        mask = target_batch.mask
+        # Dollar-neutral centering, then L1 normalization
+        valid = mask.sum().clamp_min(self.cfg.sharpe_eps)
+        mean = (w_asset * mask).sum() / valid
+        w_asset = (w_asset - mean) * mask
+        denom = w_asset.abs().sum().clamp_min(self.cfg.sharpe_eps)
         w_asset = w_asset / denom
 
         return {
