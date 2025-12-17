@@ -18,10 +18,74 @@ if str(ROOT_DIR) not in sys.path:
 
 from attention.cache import ResidualCache
 from attention.data import FeatureRepository, FactorBatch
-from attention.losses import explained_variance, rolling_sharpe, turnover_cost, detach_tail
+from attention.losses import explained_variance, rolling_sharpe, detach_tail
 from attention.longconv import LongConv
 from attention.model import AttentionFactorLayer
 from attention.writer import FactorResultWriter
+
+
+def _freq(freq: str) -> str:
+    f = str(freq or "D").upper()
+    return {"D": "D", "B": "B", "W": "W-FRI", "M": "ME"}.get(f, f)
+
+
+def _reb_dates(dates: Sequence, freq: str) -> set[pd.Timestamp]:
+    idx = pd.DatetimeIndex(pd.to_datetime(pd.Index(dates))).sort_values().unique()
+    if idx.empty:
+        return set()
+    f = _freq(freq)
+    if f in {"D", "B"}:
+        return set(pd.Timestamp(x) for x in idx)
+    s = pd.Series(1, index=idx)
+    out: set[pd.Timestamp] = set()
+    for _, g in s.groupby(pd.Grouper(freq=f)):
+        if not g.empty:
+            out.add(pd.Timestamp(g.index[-1]))
+    out.add(pd.Timestamp(idx[-1]))
+    return out
+
+
+def _keep(cfg: "AttentionConfig") -> int:
+    f = _freq(cfg.rebalance)
+    if f in {"D", "B"}:
+        return int(cfg.sharpe_window)
+    if f.startswith("W"):
+        return max(4, int(cfg.sharpe_window) // 5)
+    if f in {"M", "ME"}:
+        return max(3, int(cfg.sharpe_window) // 21)
+    return int(cfg.sharpe_window)
+
+
+def _short(w: torch.Tensor) -> torch.Tensor:
+    return torch.clamp(-w, min=0.0).sum(-1)
+
+
+def _turn(w: torch.Tensor, w_prev: Optional[torch.Tensor]) -> torch.Tensor:
+    if w_prev is None:
+        w_prev = torch.zeros_like(w)
+    return torch.abs(w - w_prev).sum(-1)
+
+
+def _normalize_ls(w: torch.Tensor, mask: Optional[torch.Tensor], eps: float) -> torch.Tensor:
+    if mask is None:
+        mask = torch.ones_like(w)
+    mask = torch.nan_to_num(mask, nan=0.0, posinf=0.0, neginf=0.0)
+    w = w * mask
+
+    valid = mask.sum().clamp_min(eps)
+    mean = (w * mask).sum() / valid
+    w = (w - mean) * mask
+
+    gross = w.abs().sum().clamp_min(eps)
+    w = w / gross
+
+    pos = torch.clamp(w, min=0.0)
+    neg = torch.clamp(w, max=0.0)
+    pos_sum = pos.sum()
+    neg_sum = (-neg).sum()
+    if pos_sum > eps and neg_sum > eps:
+        w = pos * (0.5 / pos_sum) + neg * (0.5 / neg_sum)
+    return w
 
 
 @dataclass(frozen=True)
@@ -51,6 +115,7 @@ class AttentionConfig:
     best_model_path: Optional[str] = None
     window_years: int = 8
     step_years: int = 1
+    rebalance: str = "D"
 
     @classmethod
     def from_file(cls, path: Path) -> "AttentionConfig":
@@ -96,13 +161,7 @@ class StatArbModel(nn.Module):
 
         target_out = self.attention(target_batch.features, target_batch.returns, target_batch.mask)
         w_asset = target_out.omega_eps.T @ port_weights
-        mask = target_batch.mask
-        # Dollar-neutral centering, then L1 normalization
-        valid = mask.sum().clamp_min(self.cfg.sharpe_eps)
-        mean = (w_asset * mask).sum() / valid
-        w_asset = (w_asset - mean) * mask
-        denom = w_asset.abs().sum().clamp_min(self.cfg.sharpe_eps)
-        w_asset = w_asset / denom
+        w_asset = _normalize_ls(w_asset, target_batch.mask, eps=self.cfg.sharpe_eps)
 
         return {
             "w_asset": w_asset,
@@ -150,18 +209,33 @@ class StatArbTrainer:
             return
         lookback = self.cfg.lookback
         for ep in range(self.cfg.train_epochs):
-            bar = tqdm(range(lookback, len(dates)), desc=f"joint train {ep+1}/{self.cfg.train_epochs}", leave=False)
+            reb = _reb_dates(dates[lookback:], self.cfg.rebalance)
+            pos = [i for i in range(lookback, len(dates)) if pd.Timestamp(dates[i]) in reb]
+            if not pos:
+                return
+            bar = tqdm(pos, desc=f"joint train {ep+1}/{self.cfg.train_epochs}", leave=False)
             sharpe_buf: List[torch.Tensor] = []
             w_prev: Optional[torch.Tensor] = None
-            for idx in bar:
+            k = _keep(self.cfg)
+            for pi, idx in enumerate(bar):
                 window_batches, target_batch, date_key = self._window(dates, idx)
                 out = self.model(window_batches, target_batch)
                 w_asset = out["w_asset"]
-                gross = (target_batch.returns * w_asset).sum()
-                cost = turnover_cost(w_asset, w_prev, turn_penalty=self.cfg.turn_penalty, short_penalty=self.cfg.short_penalty)
-                net = gross - cost
+                nxt = pos[pi + 1] if pi + 1 < len(pos) else len(dates)
+                end = max(idx + 1, nxt)
+                tcost = self.cfg.turn_penalty * _turn(w_asset, w_prev)
+                log_sum = torch.tensor(0.0, device=self.device)
+                short_daily = self.cfg.short_penalty * _short(w_asset)
+                for j in range(idx, end):
+                    rj = self.repository.load_ret(dates[j])
+                    gross_j = (rj * w_asset).sum()
+                    cost_j = short_daily + (tcost if j == idx else 0.0)
+                    net_j = gross_j - cost_j
+                    net_j = torch.clamp(net_j, min=-0.999999)
+                    log_sum = log_sum + torch.log1p(net_j)
+                net = torch.expm1(log_sum)
 
-                sharpe_buf = detach_tail(sharpe_buf + [net], self.cfg.sharpe_window)
+                sharpe_buf = detach_tail(sharpe_buf + [net], k)
                 sharpe = rolling_sharpe(sharpe_buf, eps=self.cfg.sharpe_eps)
                 ev = explained_variance(out["target"].residuals, target_batch.returns, target_batch.mask)
                 loss = -(self.cfg.lambda_sr * sharpe + self.cfg.lambda_var * ev)
@@ -208,29 +282,31 @@ class StatArbRunner:
     def run(self, dates: Sequence, split: str = "full") -> None:
         lookback = self.cfg.lookback
         w_prev: Optional[torch.Tensor] = None
+        w_hold: Optional[torch.Tensor] = None
+        reb = _reb_dates(dates[lookback:], self.cfg.rebalance)
         pnl_records = []
         for idx in tqdm(range(lookback, len(dates)), desc=f"infer[{split}]", leave=False):
             window_dates = dates[idx - lookback : idx]
             target_date = dates[idx]
-            window_batches = [self.repository.load_snapshot(d) for d in window_dates]
             target_batch = self.repository.load_snapshot(target_date)
-            # warm cache
-            for d, b in zip(window_dates, window_batches):
-                self._residual_from_cache(str(d), b)
-            out = self.model(window_batches, target_batch)
-            w_asset = out["w_asset"].detach()
+            do_reb = pd.Timestamp(target_date) in reb or w_hold is None
+            if do_reb:
+                window_batches = [self.repository.load_snapshot(d) for d in window_dates]
+                for d, b in zip(window_dates, window_batches):
+                    self._residual_from_cache(str(d), b)
+                out = self.model(window_batches, target_batch)
+                w_hold = out["w_asset"].detach()
+                self.cache.set(str(target_date), out["target"].residuals.detach().cpu())
+            w_asset = w_hold
             gross = float((target_batch.returns * w_asset).sum().item())
-            cost = float(
-                turnover_cost(w_asset, w_prev, turn_penalty=self.cfg.turn_penalty, short_penalty=self.cfg.short_penalty)
-                .detach()
-                .cpu()
-                .item()
-            )
+            turn = float((_turn(w_asset, w_prev) if do_reb else torch.tensor(0.0, device=self.device)).detach().cpu().item())
+            short = float(_short(w_asset).detach().cpu().item())
+            cost = self.cfg.turn_penalty * turn + self.cfg.short_penalty * short
+            if do_reb:
+                w_prev = w_asset
             net = gross - cost
             pnl_records.append({"date": target_date, "gross": gross, "net": net, "cost": cost})
             self.writer.save_portfolio(target_date, target_batch.assets, w_asset, split=split)
-            self.cache.set(str(target_date), out["target"].residuals.detach().cpu())
-            w_prev = w_asset
         self.writer.save_pnl(pnl_records, split=split)
 
 

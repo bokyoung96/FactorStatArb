@@ -23,7 +23,7 @@ from attention import (
 )
 from loader import Loader
 from models.util import DeviceSelector
-from root import FACTOR_DIR
+from root import factor_dir_freq
 
 
 def main(config_path: Optional[Path] = None) -> None:
@@ -37,9 +37,10 @@ def main(config_path: Optional[Path] = None) -> None:
 
     window_years = cfg.window_years
     step_years = cfg.step_years
-    cache_dir = Path(cfg.cache_dir) if cfg.cache_dir else FACTOR_DIR / "cache"
-    best_path = Path(cfg.best_model_path) if cfg.best_model_path else FACTOR_DIR / "best_longconv.pt"
-    writer = FactorResultWriter()
+    factor_dir = factor_dir_freq(cfg.rebalance)
+    cache_dir = Path(cfg.cache_dir) if cfg.cache_dir else factor_dir / "cache"
+    best_path = Path(cfg.best_model_path) if cfg.best_model_path else factor_dir / "best_longconv.pt"
+    writer = FactorResultWriter(output_dir=factor_dir)
     cache = ResidualCache(cache_dir=cache_dir)
 
     years = sorted({d.year for d in dates})

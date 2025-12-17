@@ -180,3 +180,9 @@ class FeatureRepository:
             mean=mean.to(self.device),
             std=std.to(self.device),
         )
+
+    def load_ret(self, date) -> torch.Tensor:
+        if date not in self.date_to_pos:
+            raise KeyError(f"Date {date} not found.")
+        pos = self.date_to_pos[date]
+        return self.return_tensor[pos].to(self.device)
