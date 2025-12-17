@@ -9,7 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from models.performance.backtest.bt import Bt, Cfg, Rep
-from models.performance.backtest.cost import Cost
+from models.performance.backtest.cost import Cost, KoreanCost, ZeroCost
 from models.performance.backtest.io import BT_DIR, PxStore, WStore
 from root import factor_dir_freq
 
@@ -27,7 +27,7 @@ def run(
     freq: str = "D",
     lag: int = 0,
     aum: float = 100_000_000.0,
-    cost: Optional[Cost] = None,
+    cost: Optional[Cost | str] = None,
     beta_neutral: bool = False,
     beta_lookback: int = 252,
     force_px: bool = False,
@@ -43,6 +43,16 @@ def run(
     px = store.load()
     factor_dir = factor_dir_freq(freq)
     w = WStore(base_dir=factor_dir / "portfolio_weights").weight()
+
+    if isinstance(cost, str):
+        key = cost.strip().lower()
+        if key in {"koreancost"}:
+            cost = KoreanCost()
+        elif key in {"zerocost"}:
+            cost = ZeroCost()
+        else:
+            raise ValueError(f"Unknown cost preset: {cost!r} (use 'korean' or provide a Cost instance)")
+
     cfg = Cfg(
         aum=float(aum),
         freq=str(freq),
@@ -58,5 +68,5 @@ def run(
 
 
 if __name__ == "__main__":
-    rep = run(freq="weekly", lag=0)
+    rep = run(freq="monthly", cost="zerocost", lag=0)
     print(rep.stat)

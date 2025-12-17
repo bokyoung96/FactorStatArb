@@ -40,3 +40,18 @@ class Cost:
             return 0.0
         return float(self.buy + self.sell + self.tax)
 
+
+@dataclass(frozen=True)
+class KoreanCost(Cost):
+    on: bool = True
+    buy: float = 2.0
+    sell: float = 2.0
+    tax: float = 15.0
+
+
+@dataclass(frozen=True)
+class ZeroCost(Cost):
+    on: bool = False
+    buy: float = 0.0
+    sell: float = 0.0
+    tax: float = 0.0
