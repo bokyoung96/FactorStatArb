@@ -21,9 +21,10 @@
   "sharpe_eps": 1e-6,
   "turn_penalty": 0.0005,
   "short_penalty": 0.0001,
+  "short_alpha": 0.5,
   "run_train": true,
   "run_test": true,
   "window_years": 8,
   "step_years": 1,
-  "rebalance": "D"
+  "rebalance": "W"
 }

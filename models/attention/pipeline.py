@@ -110,6 +110,7 @@ class AttentionConfig:
     sharpe_eps: float = 1e-6
     turn_penalty: float = 5e-4
     short_penalty: float = 1e-4
+    short_alpha: float = 0.0
     run_train: bool = True
     run_test: bool = True
     best_model_path: Optional[str] = None
@@ -215,6 +216,7 @@ class StatArbTrainer:
                 return
             bar = tqdm(pos, desc=f"joint train {ep+1}/{self.cfg.train_epochs}", leave=False)
             sharpe_buf: List[torch.Tensor] = []
+            short_buf: List[torch.Tensor] = []
             w_prev: Optional[torch.Tensor] = None
             k = _keep(self.cfg)
             for pi, idx in enumerate(bar):
@@ -225,7 +227,9 @@ class StatArbTrainer:
                 end = max(idx + 1, nxt)
                 tcost = self.cfg.turn_penalty * _turn(w_asset, w_prev)
                 log_sum = torch.tensor(0.0, device=self.device)
+                short_log_sum = torch.tensor(0.0, device=self.device)
                 short_daily = self.cfg.short_penalty * _short(w_asset)
+                w_short = -torch.clamp(w_asset, max=0.0)  # positive exposure for shorts
                 for j in range(idx, end):
                     rj = self.repository.load_ret(dates[j])
                     gross_j = (rj * w_asset).sum()
@@ -233,12 +237,22 @@ class StatArbTrainer:
                     net_j = gross_j - cost_j
                     net_j = torch.clamp(net_j, min=-0.999999)
                     log_sum = log_sum + torch.log1p(net_j)
+
+                    # Short-leg net: realized PnL from the short book (positive if underlying falls),
+                    # net of short borrow penalty; turnover cost is accounted for in total net.
+                    short_gross_j = -(rj * w_short).sum()
+                    short_net_j = short_gross_j - short_daily
+                    short_net_j = torch.clamp(short_net_j, min=-0.999999)
+                    short_log_sum = short_log_sum + torch.log1p(short_net_j)
                 net = torch.expm1(log_sum)
+                short_net = torch.expm1(short_log_sum)
 
                 sharpe_buf = detach_tail(sharpe_buf + [net], k)
                 sharpe = rolling_sharpe(sharpe_buf, eps=self.cfg.sharpe_eps)
+                short_buf = detach_tail(short_buf + [short_net], k)
+                sharpe_short = rolling_sharpe(short_buf, eps=self.cfg.sharpe_eps)
                 ev = explained_variance(out["target"].residuals, target_batch.returns, target_batch.mask)
-                loss = -(self.cfg.lambda_sr * sharpe + self.cfg.lambda_var * ev)
+                loss = -(self.cfg.lambda_sr * (sharpe + self.cfg.short_alpha * sharpe_short) + self.cfg.lambda_var * ev)
 
                 self.opt.zero_grad()
                 loss.backward()
