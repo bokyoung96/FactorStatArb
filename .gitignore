@@ -1,6 +1,11 @@
 # DATA
 DATA/
 
+# Backtest caches
+models/performance/backtest/*.parquet
+models/performance/backtest/out_*/
+models/performance/backtest/out/
+
 # Ignore DS_Store
 .DS_Store
 ._.DS_Store

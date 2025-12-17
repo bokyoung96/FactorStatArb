@@ -21,3 +21,18 @@ FACTOR_RETURNS_PARQUET = FACTOR_DIR / "factor_returns.parquet"
 FACTOR_PRED_PARQUET = FACTOR_DIR / "factor_predicted.parquet"
 FACTOR_RES_PARQUET = FACTOR_DIR / "factor_residuals.parquet"
 FACTOR_BEST_MODEL_PATH = FACTOR_DIR / "best_model.pt"
+
+
+def _freq_bucket(freq: str) -> str:
+    f = str(freq or "D").strip().upper()
+    if f in {"D", "B", "DAILY"}:
+        return "d"
+    if f in {"W", "W-FRI", "W-MON", "WEEKLY"} or f.startswith("W"):
+        return "w"
+    if f in {"M", "ME", "MONTHLY"} or f.startswith("M"):
+        return "m"
+    return f.lower().replace("/", "_").replace("\\", "_").replace(" ", "_")
+
+
+def factor_dir_freq(freq: str) -> Path:
+    return DATA_DIR / f"factor_{_freq_bucket(freq)}"

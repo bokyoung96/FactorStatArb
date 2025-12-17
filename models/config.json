@@ -24,5 +24,6 @@
   "run_train": true,
   "run_test": true,
   "window_years": 8,
-  "step_years": 1
+  "step_years": 1,
+  "rebalance": "D"
 }
