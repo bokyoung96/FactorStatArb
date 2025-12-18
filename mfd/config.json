@@ -1,0 +1,96 @@
+{
+  "mode_configs": {
+    "TEST": {
+      "mode": "test",
+      "batch_size": 256,
+      "max_epoch": 10,
+      "lr": 0.0001
+    }
+  },
+  "timeframe_configs": {
+    "MEDIUM": {
+      "lookback": 60,
+      "stride": 1,
+      "horizon": 20,
+      "min_assets": 200,
+      "min_valid": 0.95,
+      "model": {
+        "d_model": 64,
+        "nhead": 4,
+        "n_layers": 3,
+        "d_ff": 128,
+        "drop": 0.1
+      }
+    },
+    "LONG": {
+      "lookback": 126,
+      "stride": 1,
+      "horizon": 60,
+      "min_assets": 200,
+      "min_valid": 0.95,
+      "model": {
+        "d_model": 128,
+        "nhead": 8,
+        "n_layers": 4,
+        "d_ff": 256,
+        "drop": 0.15
+      }
+    }
+  },
+  "rolling": {
+    "train_years": 5,
+    "test_years": 1,
+    "step_years": 1
+  },
+  "features": [
+    "ret1",
+    "ret5",
+    "ret10",
+    "price_z",
+    "dist_ma20",
+    "breakout",
+    "ret1_cs_rank",
+    "m1",
+    "m3",
+    "m6",
+    "m12",
+    "ma5",
+    "ma20",
+    "ma60",
+    "ma120",
+    "macd",
+    "macds",
+    "m1_cs_z",
+    "vol5",
+    "vol10",
+    "vol20",
+    "vol60",
+    "vol120",
+    "volz",
+    "volma20",
+    "volma_r",
+    "trange",
+    "idv",
+    "volshock",
+    "vol20_cs_z",
+    "turnover",
+    "amihud",
+    "sprd",
+    "pimpact",
+    "rsi14",
+    "sto_k",
+    "sto_d",
+    "boll_up",
+    "boll_low",
+    "boll_w",
+    "high52",
+    "low52",
+    "hlr"
+  ],
+  "norm": "asset",
+  "label_type": "classification",
+  "threshold": 0.0,
+  "cache_dir": "mfd/DATA",
+  "output_dir": "mfd/out",
+  "checkpoint_dir": "mfd/models"
+}
