@@ -1,6 +1,10 @@
 # DATA
 DATA/
 
+# MFD artifacts
+/mfd/models/
+/mfd/out/
+
 # Backtest caches
 models/performance/backtest/*.parquet
 models/performance/backtest/out_*/
