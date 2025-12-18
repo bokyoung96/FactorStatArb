@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from typing import Dict, Optional
 
+import numpy as np
 import pandas as pd
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -65,8 +66,28 @@ class ScoreReader:
     def scores(self) -> Dict[str, pd.DataFrame]:
         return dict(self._scores)
 
+    def plot_hist(self, *, bins: int = 80, figsize: tuple[int, int] = (10, 8), density: bool = True):
+        import matplotlib.pyplot as plt
+
+        fig, axes = plt.subplots(2, 2, figsize=figsize, constrained_layout=True)
+        items = [("full", self.full), ("pm", self.pm), ("liq", self.liq), ("tech", self.tech)]
+        for ax, (name, df) in zip(axes.ravel(), items):
+            x = df.to_numpy(dtype=np.float32, copy=False).ravel()
+            x = x[np.isfinite(x)]
+            ax.hist(x, bins=bins, density=density)
+            mu = float(x.mean()) if x.size else float("nan")
+            sigma = float(x.std(ddof=0)) if x.size else float("nan")
+            if np.isfinite(mu):
+                ax.axvline(mu, color="red", linestyle="--", linewidth=1.5)
+            if np.isfinite(mu) and np.isfinite(sigma) and sigma > 0:
+                for k in (1, 2):
+                    ax.axvline(mu - k * sigma, color="gray", linestyle="--", linewidth=1.0)
+                    ax.axvline(mu + k * sigma, color="gray", linestyle="--", linewidth=1.0)
+            title = f"{name} (mean={mu:.4f}, std={sigma:.4f})" if np.isfinite(mu) and np.isfinite(sigma) else f"{name}"
+            ax.set_title(title)
+        return fig, axes
+
 
 if __name__ == "__main__":
     r = ScoreReader.from_config(mode="TEST", timeframe="MEDIUM")
-    print("run", r.paths.run_name)
-    print("full", r.full.shape, "pm", r.pm.shape, "liq", r.liq.shape, "tech", r.tech.shape)
+    r.plot_hist()
