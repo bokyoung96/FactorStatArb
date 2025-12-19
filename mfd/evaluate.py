@@ -38,8 +38,14 @@ def _rolling_splits(cfg: TransformerConfig, years: np.ndarray) -> list[tuple[lis
     return out
 
 
-def evaluate(*, mode: str = "TEST", timeframe: str = "MEDIUM", out: Optional[Path] = None) -> Path:
-    params = TransformerParams()
+def evaluate(
+    *,
+    mode: str = "TEST",
+    timeframe: str = "MEDIUM",
+    config_path: Optional[Path] = None,
+    out: Optional[Path] = None,
+) -> Path:
+    params = TransformerParams(config_path=config_path)
     cfg = params.get_config(mode=mode, timeframe=timeframe)
     params.validate_features(cfg.features)
     device = DeviceSelector().resolve()
