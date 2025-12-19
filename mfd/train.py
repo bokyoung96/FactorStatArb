@@ -161,8 +161,15 @@ def _train_one(
     return best_path
 
 
-def train(*, mode: str = "TEST", timeframe: str = "MEDIUM", epochs: Optional[int] = None, lr: Optional[float] = None) -> list[Path]:
-    params = TransformerParams()
+def train(
+    *,
+    mode: str = "TEST",
+    timeframe: str = "MEDIUM",
+    config_path: Optional[Path] = None,
+    epochs: Optional[int] = None,
+    lr: Optional[float] = None,
+) -> list[Path]:
+    params = TransformerParams(config_path=config_path)
     cfg = params.get_config(mode=mode, timeframe=timeframe)
     params.validate_features(cfg.features)
     bundle = load_bundle(cfg)

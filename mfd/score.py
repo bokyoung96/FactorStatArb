@@ -27,6 +27,14 @@ def _ensure_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _pct_tag(pct: float) -> str:
+    x = float(pct)
+    if abs(x - round(x)) < 1e-9:
+        return str(int(round(x)))
+    s = f"{x:.6g}"
+    return s.replace(".", "p")
+
+
 @dataclass(frozen=True)
 class ScorePaths:
     root_dir: Path
@@ -152,8 +160,43 @@ class TradeScore:
         return out
 
 
+def save_multi(
+    *,
+    mode: str = "TEST",
+    timeframe: str = "MEDIUM",
+    config_path: Optional[Path] = None,
+    bottom_pcts: list[float],
+    mfd_metric: str = "dispersion",
+    universe_path: Path = UNIVERSE_PARQUET,
+    out_dir: Optional[Path] = None,
+    prefix: str = "price_trends_score_transformer_medium_mfd",
+) -> dict[float, Path]:
+    sr = ScoreReader.from_config(mode=mode, timeframe=timeframe, config_path=config_path)
+    base = ScorePaths.from_reader(sr)
+    default_scores_dir = (ROOT_DIR.parent / "PriceTrends" / "scores").resolve()
+    if out_dir is not None:
+        out_base = Path(out_dir)
+    elif default_scores_dir.exists():
+        out_base = default_scores_dir
+    else:
+        out_base = base.out_root
+    out_base.mkdir(parents=True, exist_ok=True)
+
+    paths: dict[float, Path] = {}
+    for pct in bottom_pcts:
+        ts = TradeScore(scores=sr, bottom_pct=float(pct), mfd_metric=mfd_metric, universe_path=universe_path)
+        tag = _pct_tag(float(pct))
+        path = out_base / f"{prefix}_{tag}.parquet"
+        paths[float(pct)] = ts.save(out_path=path)
+    return paths
+
+
 if __name__ == "__main__":
-    ts = TradeScore.from_config(mode="TEST", timeframe="MEDIUM", bottom_pct=50.0, mfd_metric="dispersion")
-    path = ts.save()
-    ts.plot_counts()
-    print("saved", path)
+    paths = save_multi(
+        mode="TEST",
+        timeframe="MEDIUM",
+        bottom_pcts=list(range(10, 101, 10)),
+        mfd_metric="dispersion",
+    )
+    for pct, path in paths.items():
+        print(f"saved bottom_pct={pct:g} -> {path}")
